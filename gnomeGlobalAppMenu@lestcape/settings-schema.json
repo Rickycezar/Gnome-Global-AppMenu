@@ -33,12 +33,6 @@
         "description": "Allow to synchronize the menus with others in the same panel (Experimental)",
         "tooltip": "Select if you want to synchronize the menus with others in the same panel."
     },
-    "autoscrollig-appmenu" : {
-        "type" : "checkbox",
-        "default" : false,
-        "description": "Enable the panel menu auto scrolling (Experimental)",
-        "tooltip": "Select if you want to enable the auto scrolling feature inside the panel menu when there is no space available."
-    },
     "separator-application-top" : {
         "type": "separator"
     },
@@ -133,19 +127,25 @@
     "global-overlay-key" : {
         "type" : "keybinding",
         "description" : "Keyboard shortcut to open and close the menu",
-        "default" : "Alt_L"
+        "default" : "<Super>g"
+    },
+    "oversize-mode": {
+        "type": "combobox",
+        "description": "Apply this mode when the panel is oversized:",
+        "default": "1",
+        "tooltip": "Select the action to take when the panel menu oversize the available space.",
+        "options": {
+            "None": 1,
+            "Fake Menu": 2,
+            "Auto Scrolling": 3,
+            "Wrap Text": 4
+        }
     },
     "display-in-panel" : {
         "type" : "checkbox",
         "default" : true,
         "description": "Display the main menu in the panel",
         "tooltip": "Select if you want to display the main menu in the panel."
-    },
-    "menu-labels-wrap" : {
-        "type" : "checkbox",
-        "default" : false,
-        "description": "Wrap the menu labels",
-        "tooltip": "Select if you want to wrapped the menu labels when there are not space."
     },
     "automatic-active-mainmenu" : {
         "type" : "checkbox",
@@ -160,6 +160,33 @@
         "default": false,
         "description": "Open the menu when I move my mouse over it",
         "tooltip": "Enable opening the menu when the mouse enters the applet."
+    },
+    "shortcut-modifier" : {
+        "type" : "keybinding",
+        "description" : "Modifier shortcut to open and close the menu of the items",
+        "default" : "<Alt>"
+    },
+    "underline-shortcut": {
+        "type": "checkbox",
+        "default": false,
+        "indent": true,
+        "description": "Underline the selected shortcut characters",
+        "tooltip": "Allow to underline the selected shortcut characters."
+    },
+    "allow-shortcut-colors": {
+        "type": "checkbox",
+        "default": false,
+        "indent": true,
+        "description": "Allow to set a color for the selected shortcut characters",
+        "tooltip": "Allow to set a color for the selected shortcut characters."
+    },
+    "shortcut-color": {
+        "type": "colorchooser",
+        "default": "rgb(0,0,0)",
+        "indent": true,
+        "dependency": "allow-shortcut-colors",
+        "description": "Set the shortcut color",
+        "tooltip": "Set a color to realce the character shortcut"
     },
     "separator-submenu-top" : {
         "type": "separator"

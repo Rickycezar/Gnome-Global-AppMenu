@@ -19,6 +19,7 @@ const GLib = imports.gi.GLib;
 const Shell = imports.gi.Shell;
 const Meta = imports.gi.Meta;
 const Gtk = imports.gi.Gtk;
+const GObject = imports.gi.GObject;
 
 const Lang = imports.lang;
 const Signals = imports.signals;
@@ -62,6 +63,15 @@ SystemProperties.prototype = {
       this._environmentCallback = null;
       this.xSetting = new Gio.Settings({ schema: 'org.gnome.settings-daemon.plugins.xsettings' });
       this._gtkSettings = Gtk.Settings.get_default();
+      /*this._showsMenuBarId = this._gtkSettings.connect('notify::gtk-shell-shows-menubar', Lang.bind(this, function() {
+         let values = this.xSetting.get_value('overrides').deep_unpack();
+         if('Gtk/ShellShowsMenubar' in values) {
+            let val = values['Gtk/ShellShowsMenubar'].deep_unpack();
+            if (val == 0) {
+               this.shellShowMenubar(true);
+            }
+         }
+      }));*/
    },
 
    shellShowAppmenu: function(show) {
@@ -172,11 +182,12 @@ SystemProperties.prototype = {
       let envMenuProxy = GLib.getenv('QT_QPA_PLATFORMTHEME');
       if(active && (!envMenuProxy || (envMenuProxy.indexOf("appmenu") == -1))) {
          GLib.setenv('QT_QPA_PLATFORMTHEME', "appmenu-qt5", true);
-         return false;
-      } else if(active && envMenuProxy && (envMenuProxy.indexOf("appmenu") != -1)) {
+         return true;
+      } else if(!active && envMenuProxy && (envMenuProxy.indexOf("appmenu") != -1)) {
          GLib.setenv('QT_QPA_PLATFORMTHEME', "qgnomeplatform", true);
+         return true;
       }
-      return true;
+      return false;
    },
 
    activeUnityMenuProxy: function(active) {
@@ -239,18 +250,21 @@ SystemProperties.prototype = {
                values[xsetting] = GLib.Variant.new('i', 1);
                let returnValue = GLib.Variant.new('a{sv}', values);
                this.xSetting.set_value('overrides', returnValue);
+               Gio.Settings.sync ()
             }
          } else {
             values[xsetting] = GLib.Variant.new('i', 1);
             let returnValue = GLib.Variant.new('a{sv}', values);
             this.xSetting.set_value('overrides', returnValue);
+            Gio.Settings.sync ()
          }
       } else if(xsetting in values) {
-         let status = values[xsetting]
+         let status = values[xsetting];
          if(status != 0) {
             values[xsetting] = GLib.Variant.new('i', 0); 
             let returnValue = GLib.Variant.new('a{sv}', values);
             this.xSetting.set_value('overrides', returnValue);
+            Gio.Settings.sync ()
          }
       }
    },
@@ -318,11 +332,12 @@ function X11RegisterMenuWatcher() {
 
 X11RegisterMenuWatcher.prototype = {
    _init: function() {
-      this._registeredWindows = { };
+      this._registeredWindows = {};
       this._ownName = null;
       this._ownNameId = null;
       this._windowsCreatedId = 0;
       this._windowsChangedId = 0;
+      this._cancellable = new Gio.Cancellable;
       this._tracker = Shell.WindowTracker.get_default();
       this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(DBusRegistrar, this);
    },
@@ -618,8 +633,8 @@ X11RegisterMenuWatcher.prototype = {
             }
          }
       }
-      // Debugging for when people find bugs..
-      global.logError("X11Menu Whatcher: Could not find XID for window with title %s".format(wind.title));
+      // FIXME: Debugging for when people find bugs or not? In Waylan there are not souch thing like XID...
+      // global.logError("X11Menu Whatcher: Could not find XID for window with title %s".format(wind.title));
       return null;
    },
 
@@ -660,9 +675,11 @@ GtkMenuWatcher.prototype = {
    _init: function() {
       this._registeredWindows = [];
       this._isWatching = false;
+      this._appSysId = 0;
       this._windowsCreatedId = 0;
       this._windowsChangedId = 0;
       this._tracker = Shell.WindowTracker.get_default();
+      this._appSys = Shell.AppSystem.get_default();
    },
 
    // Public functions
@@ -675,8 +692,41 @@ GtkMenuWatcher.prototype = {
          if(this._windowsChangedId == 0) {
             this._windowsChangedId = this._tracker.connect('tracked-windows-changed', Lang.bind(this, this._updateWindowList));
          }
+         if(this._appSysId == 0) {
+            this._appSysId = this._appSys.connect('app-state-changed', Lang.bind(this, this._onAppMenuNotify));
+         }
          this._isWatching = true;
       }
+   },
+
+   _onAppMenuNotify: function(appSys, targetAppSys) {
+      let isBusy = (targetAppSys != null &&
+                   (targetAppSys.get_state() == Shell.AppState.STARTING ||
+                    targetAppSys.get_busy()));
+      if (!isBusy) {
+         let windows = this._findWindowForApp(targetAppSys);
+         for(let pos in windows) {
+            let index = windows[pos];
+            let windData = this._registeredWindows[index];
+            if (windData.window && !windData.appMenu) {
+               this._tryToGetMenuClient(windData.window);
+            }
+         }
+      }
+   },
+
+   _findWindowForApp: function(targetAppSys) {
+      let windows = [];
+      let id = targetAppSys.get_id();
+      for (let i = 0; i < this._registeredWindows.length; i++) {
+         let currentWindow = this._registeredWindows[i].window;
+         if(currentWindow) {
+             let currentTracker = this._tracker.get_window_app(currentWindow);
+             if (currentTracker && (id == currentTracker.get_id()))
+                 windows.push(i);
+         }
+      }
+      return windows;
    },
 
    getMenuForWindow: function(window) {
@@ -838,34 +888,54 @@ GtkMenuWatcher.prototype = {
       let senderDbus=null, isGtkApp = false;
       let appmenuPath = null, menubarPath=null, windowPath = null, appPath = null;
       let appTracker = this._tracker.get_window_app(window);
-      let index = this._findWindow(window);
-      if((index == -1) && (appTracker)&&(GTK_BLACKLIST.indexOf(appTracker.get_id()) == -1)) {
-         menubarPath = window.get_gtk_menubar_object_path();
-         appmenuPath = window.get_gtk_app_menu_object_path();
-         windowPath  = window.get_gtk_window_object_path();
-         appPath     = window.get_gtk_application_object_path();
-         senderDbus  = window.get_gtk_unique_bus_name();
-         isGtkApp    = (senderDbus != null);
-         try {
-            let pr = Object.getOwnPropertyNames(window);
-         } catch(e) {
-            global.log("Error: " + e);
+
+      if((appTracker)&&(GTK_BLACKLIST.indexOf(appTracker.get_id()) == -1)) {
+         let index = this._findWindow(window);
+         if ((index == -1) || (this._registeredWindows[index].sender == null)) {
+            menubarPath = window.get_gtk_menubar_object_path();
+            appmenuPath = window.get_gtk_app_menu_object_path();
+            windowPath  = window.get_gtk_window_object_path();
+            appPath     = window.get_gtk_application_object_path();
+            senderDbus  = window.get_gtk_unique_bus_name();
+            isGtkApp    = (senderDbus != null);
+
+            //Hack: For some reason (gnome?), the menubar path disapear, but we know where it's supposed that it will be if we have the appmenuPath.
+            //sender::1.75, menubarPath:/org/gnome/gedit/menus/menubar, appmenuPath:/org/gnome/gedit/menus/appmenu, windowPath:/org/gnome/gedit/window/1, appPath:/org/gnome/gedit
+            //sender::1.73, menubarPath:/org/Nemo/menus/menubar, appmenuPath:null, windowPath:/org/Nemo/window/1, appPath:/org/Nemo
+            //sender::1.68, menubarPath:null, appmenuPath:/org/gnome/Terminal/menus/appmenu, windowPath:/org/gnome/Terminal/window/3, appPath:/org/gnome/Terminal
+            if ((menubarPath == null) && (appmenuPath != null)) {
+               menubarPath = appmenuPath.replace("appmenu", "menubar");
+               if (menubarPath == appmenuPath) //Is not there.
+                  menubarPath = null;
+            }
+
+            global.log("sender:" + senderDbus + ", menubarPath:" + menubarPath + ", appmenuPath:" + appmenuPath + ", windowPath:" + windowPath + ", appPath:" + appPath);
+            let windowData = {};
+            if (index != -1)
+               windowData = this._registeredWindows[index];
+            windowData["window"] = window;
+            windowData["menubarObjectPath"] = menubarPath;
+            windowData["appmenuObjectPath"] = appmenuPath;
+            windowData["windowObjectPath"] = windowPath;
+            windowData["appObjectPath"] = appPath;
+            windowData["sender"] = senderDbus;
+            windowData["isGtk"] = isGtkApp;
+            windowData["icon"] = null;
+            windowData["appMenu"] = null;
+            windowData["fail"] = false;
+            if (index == -1)
+               this._registeredWindows.push(windowData);
          }
-         let windowData = {
-            window: window,
-            menubarObjectPath: menubarPath,
-            appmenuObjectPath: appmenuPath,
-            windowObjectPath: windowPath,
-            appObjectPath: appPath,
-            sender: senderDbus,
-            isGtk: isGtkApp,
-            icon: null,
-            appMenu: null,
-            fail: false
-         };
-         this._registeredWindows.push(windowData);
-         index = this._registeredWindows.length -1;
-         this._tryToGetMenuClient(window);
+         let isBusy = false;
+         if (appTracker) {
+            let appSys = this._appSys.lookup_app(appTracker.get_id());
+            isBusy = (appSys != null &&
+                     (appSys.get_state() == Shell.AppState.STARTING ||
+                      appSys.get_busy()));
+         }
+         if (!isBusy) { 
+             this._tryToGetMenuClient(window);
+         }
       }
    },
 
@@ -896,6 +966,10 @@ GtkMenuWatcher.prototype = {
          if(this._windowsChangedId > 0) {
             this._tracker.disconnect(this._windowsChangedId);
             this._windowsChangedId = 0;
+         }
+         if(this._appSysId > 0) {
+            this._appSys.disconnect(this._appSysId);
+            this._appSysId = 0;
          }
          for(let index in this._registeredWindows) {
             this._destroyMenu(this._registeredWindows[index].window);

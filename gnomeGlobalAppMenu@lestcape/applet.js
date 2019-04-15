@@ -8,6 +8,7 @@ const Clutter = imports.gi.Clutter;
 const GLib = imports.gi.GLib;
 const Gio = imports.gi.Gio;
 const Gtk = imports.gi.Gtk;
+const Gdk = imports.gi.Gdk;
 const Meta = imports.gi.Meta;
 const Shell = imports.gi.Shell;
 
@@ -49,13 +50,15 @@ KeybindingManager.prototype = {
         this._custom_keybindings = {};
         this.actionGrab = null;
         this.keyGrab = null;
+        this.grabFocus = null;
+        this.focusWindow = null;
         this.inihibit = false;
 
         this.hackId = global.stage.connect('captured-event', Lang.bind(this, this._stageEventHandler));
         this.updateId = Main.sessionMode.connect('updated', Lang.bind(this, this._sessionUpdated)); 
 
         this._accelId = global.display.connect('accelerator-activated', Lang.bind(this, this._acceleratorActivated)); 
-        this._modAccelId = global.display.connect('modifiers-accelerator-activated', Lang.bind(this, this._modifiersAceleratorActivated)); 
+        this._modAccelId = global.display.connect('modifiers-accelerator-activated', Lang.bind(this, this._modifiersAceleratorActivated));
     },
 
     _acceleratorActivated: function(display, actionPreformed, deviceid, timestamp) {
@@ -125,18 +128,27 @@ KeybindingManager.prototype = {
             } else {
                 action = global.display.get_keybinding_action(keyCode, modifierState);
                 this.actionGrab = action;
+                this.grabFocus = global.stage.key_focus;
             }
         } else if (event.type() == Clutter.EventType.KEY_RELEASE) {
-            if((MOD_MASK.indexOf(this.keyGrab) > -1) && (this.keyGrab == event.get_key_symbol())) {
+            let execute = false;
+            if((global.stage.key_focus == this.grabFocus) && (MOD_MASK.indexOf(this.keyGrab) > -1) && (this.keyGrab == event.get_key_symbol())) {
                 keyCode = event.get_key_code();
                 modifierState = event.get_state();
                 action = global.display.get_keybinding_action(keyCode, modifierState);
                 if (this.actionGrab && Meta.external_binding_name_for_action(this.actionGrab).indexOf("external-grab") != -1) {
                     let action = this.actionGrab;
                     this.actionGrab = null;
+                    if(this.grabFocus == Main.uiGroup)
+                        global.stage.set_key_focus(null);
                     global.display.emit("accelerator-activated", action, null, global.get_current_time());
+                    execute = true;
                 }
             }
+            if(!execute && this.focusWindow && (!global.stage.key_focus || (global.stage.key_focus == Main.uiGroup))) {
+                this.focusWindow.activate(global.get_current_time());
+            }
+            this.grabFocus = null;
             this.keyGrab = null;
         }
     },
@@ -201,8 +213,13 @@ KeybindingManager.prototype = {
             } else if (event.type() == Clutter.EventType.KEY_RELEASE) {
                 callback(display, global.screen, event, kb, actionPreformed);
             } else {
-                global.stage.set_key_focus(Main.uiGroup);
                 if (event.type() == Clutter.EventType.KEY_PRESS) {
+                    this.grabFocus = global.stage.key_focus;
+                    this.focusWindow = global.display.focus_window;
+                    if(!this.grabFocus) {
+                        this.grabFocus = Main.uiGroup;
+                        global.stage.set_key_focus(this.grabFocus);
+                    }
                     this.actionGrab = actionPreformed;
                 }
             }
@@ -217,6 +234,40 @@ KeybindingManager.prototype = {
             delete this.bindings[name];
         }
     },
+
+    key_is_modifier: function(keyval) {
+      switch (keyval) {
+         case Gdk.KEY_Shift_L:
+         case Gdk.KEY_Shift_R:
+         case Gdk.KEY_Control_L:
+         case Gdk.KEY_Control_R:
+         case Gdk.KEY_Caps_Lock:
+         case Gdk.KEY_Shift_Lock:
+         case Gdk.KEY_Meta_L:
+         case Gdk.KEY_Meta_R:
+         case Gdk.KEY_Alt_L:
+         case Gdk.KEY_Alt_R:
+         case Gdk.KEY_Super_L:
+         case Gdk.KEY_Super_R:
+         case Gdk.KEY_Hyper_L:
+         case Gdk.KEY_Hyper_R:
+         case Gdk.KEY_ISO_Lock:
+         case Gdk.KEY_ISO_Level2_Latch:
+         case Gdk.KEY_ISO_Level3_Shift:
+         case Gdk.KEY_ISO_Level3_Latch:
+         case Gdk.KEY_ISO_Level3_Lock:
+         case Gdk.KEY_ISO_Level5_Shift:
+         case Gdk.KEY_ISO_Level5_Latch:
+         case Gdk.KEY_ISO_Level5_Lock:
+         case Gdk.KEY_ISO_Group_Shift:
+         case Gdk.KEY_ISO_Group_Latch:
+         case Gdk.KEY_ISO_Group_Lock:
+           return true;
+         default:
+           return false;
+      }
+      return  false;
+   },
 
     destroy: function() {
         if(this.updateId) {
